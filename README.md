@@ -112,6 +112,7 @@ runs/my-app/
   state/
     current_doc
     round
+    session_id
     session_started
 ```
 
@@ -122,6 +123,32 @@ runs/my-app/state/current_doc
 ```
 
 `current_doc` 中的相对路径会基于 `docs/iterations/` 解析。
+
+## Codex 会话记忆
+
+runner 默认不会每一轮都新建一个完全独立的 Codex 会话。
+
+第一轮启动后，runner 会从 `codex exec --json` 的 `thread.started` 事件中提取会话 id，并保存到：
+
+```text
+runs/my-app/state/session_id
+```
+
+第二轮开始后，runner 会使用这个 id 显式执行：
+
+```bash
+codex exec ... resume <session_id> "<本轮提示词>"
+```
+
+这样 Codex 能在同一个会话里延续前几轮的对话记忆、推理脉络、已做过的尝试和失败经验。它比 `resume --last` 更稳，因为同一台服务器同时跑多个项目时，不会误续到其他项目最近的一条会话。
+
+如果要主动丢弃旧会话，从新会话重新开始：
+
+```bash
+CODEX_RESET_SESSION=1 ./bin/codex-continuous-runner.sh my-app my-app-seed.md
+```
+
+注意：同一个会话不等于无限上下文。长时间运行后，Codex 仍可能进行上下文压缩或摘要。因此关键长期规则、素材路径和产品方向仍应写入 `docs/context/`，让 runner 每轮固定注入。
 
 ## 长期常驻上下文
 
@@ -242,6 +269,7 @@ cp urgent-followup.md runs/my-app/requests/
 | `CODEX_MAX_ROUNDS` | 最大轮数，`0` 表示一直运行。 |
 | `CODEX_SLEEP_SECONDS` | 每轮之间的等待秒数。 |
 | `CODEX_RESET_LOOP` | 设为 `1` 时忽略已保存状态，从 seed 文档重新开始。 |
+| `CODEX_RESET_SESSION` | 设为 `1` 时丢弃保存的 Codex 会话 id，重新开始会话。 |
 | `CODEX_STRATEGY_MODE` | 迭代策略，默认 `expansive`。可设为 `conservative`。 |
 | `CODEX_BASELINE_VERIFY` | 是否要求 Codex 主动做全面基线验证，默认 `1`。 |
 | `CODEX_FEATURE_DISCOVERY` | 是否要求 Codex 主动发现并规划新功能，默认 `1`。 |

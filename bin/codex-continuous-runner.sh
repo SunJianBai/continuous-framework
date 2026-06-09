@@ -42,6 +42,7 @@ usage() {
   CODEX_NEXT_REQUIREMENTS_FILE       一次性的下一轮追加需求文件
   CODEX_REQUESTS_DIR                 放入 *.md 或 *.txt 文件，用于注入下一轮需求
   CODEX_CONSUME_REQUIREMENTS         成功轮次后移动已注入需求文件，默认：1
+  CODEX_RESET_SESSION                设为 1 时丢弃保存的 Codex 会话 id，重新开始会话
 USAGE
 }
 
@@ -133,6 +134,7 @@ resolve_doc_path() {
 
 STATE_CURRENT_DOC="$STATE_DIR/current_doc"
 STATE_SESSION_STARTED="$STATE_DIR/session_started"
+STATE_SESSION_ID="$STATE_DIR/session_id"
 STATE_ROUND="$STATE_DIR/round"
 STOP_AFTER_CURRENT_ROUND_FILE="${CODEX_STOP_AFTER_CURRENT_ROUND_FILE:-$CONTROL_DIR/stop-after-current-round}"
 NEXT_REQUIREMENTS_FILE="${CODEX_NEXT_REQUIREMENTS_FILE:-$CONTROL_DIR/next-requirements.md}"
@@ -145,7 +147,13 @@ fi
 
 if [[ "${CODEX_RESET_LOOP:-0}" == "1" ]]; then
   : > "$STATE_SESSION_STARTED"
+  rm -f "$STATE_SESSION_ID"
   printf '0\n' > "$STATE_ROUND"
+fi
+
+if [[ "${CODEX_RESET_SESSION:-0}" == "1" ]]; then
+  : > "$STATE_SESSION_STARTED"
+  rm -f "$STATE_SESSION_ID"
 fi
 
 if [[ -s "$STATE_ROUND" ]] && [[ "$(head -n 1 "$STATE_ROUND")" =~ ^[0-9]+$ ]]; then
@@ -241,6 +249,14 @@ archive_consumed_requirements() {
     request_base="$(basename "$request_file")"
     mv "$request_file" "$PROCESSED_REQUESTS_DIR/${stamp}-${request_base}"
   done
+}
+
+extract_session_id_from_log() {
+  local log_file="$1"
+  local thread_line
+  thread_line="$(grep -m 1 '"thread.started"' "$log_file" || true)"
+  [[ -n "$thread_line" ]] || return 1
+  printf '%s\n' "$thread_line" | sed -nE 's/.*"thread_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
 }
 
 while true; do
@@ -528,10 +544,20 @@ PROMPT
     cmd+=("${extra_args[@]}")
   fi
 
+  saved_session_id=""
+  if [[ -s "$STATE_SESSION_ID" ]]; then
+    saved_session_id="$(head -n 1 "$STATE_SESSION_ID")"
+  fi
+
   if [[ ! -s "$STATE_SESSION_STARTED" ]]; then
     "${codex_invocation[@]}" "${cmd[@]}" "$(cat "$prompt_file")" > "$log_file" 2>&1
     status=$?
+  elif [[ -n "$saved_session_id" ]]; then
+    echo "恢复 Codex 会话：$saved_session_id"
+    "${codex_invocation[@]}" "${cmd[@]}" resume "$saved_session_id" "$(cat "$prompt_file")" > "$log_file" 2>&1
+    status=$?
   else
+    echo "警告：已有运行状态但缺少 session_id，退回 resume --last。建议设置 CODEX_RESET_SESSION=1 重新建立显式会话。"
     "${codex_invocation[@]}" "${cmd[@]}" resume --last "$(cat "$prompt_file")" > "$log_file" 2>&1
     status=$?
   fi
@@ -546,6 +572,12 @@ PROMPT
     fi
   else
     consecutive_failures=0
+    extracted_session_id="$(extract_session_id_from_log "$log_file" || true)"
+    if [[ -n "$extracted_session_id" ]]; then
+      printf '%s\n' "$extracted_session_id" > "$STATE_SESSION_ID"
+    elif [[ ! -s "$STATE_SESSION_ID" ]]; then
+      echo "警告：本轮成功但未能从 JSONL 日志提取 Codex session id。后续将只能退回 resume --last。"
+    fi
     printf '%s\n' "$stamp" > "$STATE_SESSION_STARTED"
     printf '%s\n' "$round" > "$STATE_ROUND"
     archive_consumed_requirements
