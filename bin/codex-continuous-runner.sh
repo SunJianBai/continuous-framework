@@ -16,6 +16,8 @@ usage() {
   CODEX_PROFILE                     可选，通过 -p 传给 Codex 的配置 profile
   CODEX_PROJECTS_DIR                项目根目录，默认：<framework>/projects
   CODEX_DOCS_DIR                    迭代文档目录，默认：<framework>/docs/iterations
+  CODEX_CONTEXT_DOCS_DIR            每轮固定注入的长期上下文目录，默认：<framework>/docs/context
+  CODEX_CONTEXT_FILES               额外长期上下文文件，多个路径用冒号分隔
   CODEX_RUNS_DIR                    运行状态和日志目录，默认：<framework>/runs
   CODEX_RUN_NAME                    覆盖运行目录名，默认使用清理后的项目目录名
   CODEX_UNRESTRICTED                设为 1 时启用隔离服务器最大权限模式
@@ -63,6 +65,7 @@ FEATURE_DISCOVERY="${CODEX_FEATURE_DISCOVERY:-1}"
 RUNNER_SANDBOX="${CODEX_RUNNER_SANDBOX:-workspace-write}"
 PROJECTS_DIR="${CODEX_PROJECTS_DIR:-$FRAMEWORK_ROOT/projects}"
 DOCS_DIR="${CODEX_DOCS_DIR:-$FRAMEWORK_ROOT/docs/iterations}"
+CONTEXT_DOCS_DIR="${CODEX_CONTEXT_DOCS_DIR:-$FRAMEWORK_ROOT/docs/context}"
 RUNS_DIR="${CODEX_RUNS_DIR:-$FRAMEWORK_ROOT/runs}"
 UNRESTRICTED="${CODEX_UNRESTRICTED:-0}"
 DANGER_FULL_ACCESS="${CODEX_DANGER_FULL_ACCESS:-0}"
@@ -81,7 +84,7 @@ if [[ "$UNRESTRICTED" == "1" ]]; then
   ALLOW_SCRIPTING=1
 fi
 
-mkdir -p "$PROJECTS_DIR" "$DOCS_DIR" "$RUNS_DIR"
+mkdir -p "$PROJECTS_DIR" "$DOCS_DIR" "$CONTEXT_DOCS_DIR" "$RUNS_DIR"
 
 if [[ "$PROJECT_ARG" = /* ]]; then
   PROJECT_DIR="$PROJECT_ARG"
@@ -97,6 +100,7 @@ fi
 
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 DOCS_DIR="$(cd "$DOCS_DIR" && pwd)"
+CONTEXT_DOCS_DIR="$(cd "$CONTEXT_DOCS_DIR" && pwd)"
 RUNS_DIR="$(cd "$RUNS_DIR" && pwd)"
 
 project_base="$(basename "$PROJECT_DIR")"
@@ -151,6 +155,48 @@ else
 fi
 consecutive_failures=0
 additional_requirement_sources=()
+persistent_context_sources=()
+
+collect_persistent_context() {
+  local output_file="$1"
+  persistent_context_sources=()
+  : > "$output_file"
+
+  while IFS= read -r context_file; do
+    [[ -n "$context_file" ]] || continue
+    persistent_context_sources+=("$context_file")
+  done < <(find "$CONTEXT_DOCS_DIR" -maxdepth 1 -type f \( -name '*.md' -o -name '*.txt' \) -print | sort)
+
+  if [[ -n "${CODEX_CONTEXT_FILES:-}" ]]; then
+    local explicit_context_files
+    local context_file
+    IFS=':' read -r -a explicit_context_files <<< "$CODEX_CONTEXT_FILES"
+    for context_file in "${explicit_context_files[@]}"; do
+      [[ -n "$context_file" ]] || continue
+      if [[ -f "$context_file" ]]; then
+        persistent_context_sources+=("$context_file")
+      else
+        echo "警告：CODEX_CONTEXT_FILES 指向不存在的文件：$context_file" >&2
+      fi
+    done
+  fi
+
+  if [[ "${#persistent_context_sources[@]}" -eq 0 ]]; then
+    return 1
+  fi
+
+  {
+    echo "长期常驻上下文："
+    echo
+    echo "下面这些文档由 runner 每轮固定注入。它们不会像一次性追加需求那样被消费，适合保存长期目标、项目原则、测试素材路径、风格标准和持续策略。"
+    echo
+    for context_file in "${persistent_context_sources[@]}"; do
+      echo "===== $context_file ====="
+      cat "$context_file"
+      echo
+    done
+  } > "$output_file"
+}
 
 collect_additional_requirements() {
   local output_file="$1"
@@ -233,7 +279,9 @@ while true; do
   permission_file="$PROMPT_DIR/round-${round}-${stamp}.permissions.md"
   strategy_file="$PROMPT_DIR/round-${round}-${stamp}.strategy.md"
   requirements_file="$PROMPT_DIR/round-${round}-${stamp}.additional-requirements.md"
+  context_file="$PROMPT_DIR/round-${round}-${stamp}.persistent-context.md"
   additional_requirements_block=""
+  persistent_context_block=""
 
   if [[ "$UNRESTRICTED" == "1" ]]; then
     cat > "$permission_file" <<PERMISSIONS
@@ -360,6 +408,12 @@ STRATEGY
     rm -f "$requirements_file"
   fi
 
+  if collect_persistent_context "$context_file"; then
+    persistent_context_block="$(cat "$context_file")"
+  else
+    rm -f "$context_file"
+  fi
+
   cat > "$prompt_file" <<PROMPT
 你是一个无人值守的 Codex 开发循环执行器。当前项目目录：
 
@@ -368,6 +422,10 @@ $PROJECT_DIR
 统一迭代文档目录：
 
 $DOCS_DIR
+
+长期常驻上下文目录：
+
+$CONTEXT_DOCS_DIR
 
 当前运行状态目录：
 
@@ -399,11 +457,13 @@ $(cat "$permission_file")
 
 $(cat "$strategy_file")
 
+$persistent_context_block
+
 $additional_requirements_block
 
 请按以下规则工作：
 
-1. 先阅读当前迭代文档、相关源码、测试配置、最近日志、运行状态、README 和 git 状态。
+1. 先阅读长期常驻上下文、当前迭代文档、相关源码、测试配置、最近日志、运行状态、README 和 git 状态。
 2. 开始修改项目代码前，检查项目 git 状态和当前分支。如果项目是 git 仓库，先基于当前 HEAD 创建并切换到一个本轮专用开发分支，例如 codex/iteration-${round}-<short-slug>。只有在已经处于本轮专用分支上，或存在未提交改动导致切换不安全时，才沿用当前分支；如果沿用当前分支，必须把原因写入当前迭代文档。
 3. 如果当前文档还有未完成任务，选择一个最小但有价值的切片完成开发；如果当前文档已完成，就进入全面验证和新功能发现，不要只做低价值微调。
 4. 修改后运行能证明本轮改动正确的测试、构建或静态检查；在进入新功能开发前，按自主迭代策略尽量做全面基线验证。
@@ -421,8 +481,9 @@ $STATE_CURRENT_DOC
 12. 除统一迭代文档目录和当前运行状态目录外，不要修改项目目录外的文件，除非当前文档明确要求。
 13. 如果连续遇到同一个阻塞，记录到当前文档的“阻塞”部分，然后生成一个更小的后续文档继续绕开或缩小问题。
 14. 本轮运行期间如果用户新增了需求文件，runner 会在下一轮提示词中附加；你本轮无需轮询这些目录。可用入口是：$NEXT_REQUIREMENTS_FILE 或 $REQUESTS_DIR/*.md。
-15. 如果发现 $STOP_AFTER_CURRENT_ROUND_FILE 存在，说明用户要求 runner 在本轮结束后停止；你仍然应正常完成本轮收尾、文档更新和必要提交。
-16. 最终回答只需总结本轮改动、验证结果、git 分支/提交情况、下一轮文档路径。
+15. 长期常驻上下文不会被自动消费。如果你发现其中某条长期规则已经过期，先把建议写入当前迭代文档；只有当前任务明确要求时才修改长期上下文文件。
+16. 如果发现 $STOP_AFTER_CURRENT_ROUND_FILE 存在，说明用户要求 runner 在本轮结束后停止；你仍然应正常完成本轮收尾、文档更新和必要提交。
+17. 最终回答只需总结本轮改动、验证结果、git 分支/提交情况、下一轮文档路径。
 PROMPT
 
   echo "[$(date)] round=$round doc=$CURRENT_DOC log=$log_file"
@@ -436,6 +497,7 @@ PROMPT
     exec
     -C "$PROJECT_DIR"
     --add-dir "$DOCS_DIR"
+    --add-dir "$CONTEXT_DOCS_DIR"
     --add-dir "$LOOP_DIR"
     --skip-git-repo-check
     --json

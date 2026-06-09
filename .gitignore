@@ -14,6 +14,10 @@
 /docs/iterations/*
 !/docs/iterations/.gitkeep
 
+# Project-specific persistent context documents. Keep only the directory marker.
+/docs/context/*
+!/docs/context/.gitkeep
+
 # OS/editor noise.
 .DS_Store
 ._*

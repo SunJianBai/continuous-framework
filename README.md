@@ -16,13 +16,14 @@ codex-continuous-framework/
     runner.env.example           # 常规配置模板
     runner.unrestricted.env.example
   docs/
+    context/                     # 每轮固定注入的长期上下文，除 .gitkeep 外不入库
     iterations/                  # 生成的迭代文档，除 .gitkeep 外不入库
     templates/                   # 入库的初始迭代文档模板
   projects/                      # 被持续开发的项目，除 .gitkeep 外不入库
   runs/                          # 运行时提示词、日志和状态，除 .gitkeep 外不入库
 ```
 
-`projects/`、`runs/` 和 `docs/iterations/` 在 git 中故意保持为空目录。它们是服务器上的工作目录，可能包含被拉取的项目、大量生成产物、日志、工具链、提示词和迭代文档。
+`projects/`、`runs/`、`docs/iterations/` 和 `docs/context/` 在 git 中故意保持为空目录。它们是服务器上的工作目录，可能包含被拉取的项目、大量生成产物、日志、工具链、提示词、迭代文档和项目长期上下文。
 
 ## 快速开始
 
@@ -37,6 +38,13 @@ git clone <repo-url> projects/my-app
 
 ```bash
 cp docs/templates/seed-template.md docs/iterations/my-app-seed.md
+```
+
+如果有一份需求或原则需要每一轮都对 Codex 可见，放到长期上下文目录：
+
+```bash
+mkdir -p docs/context
+cp my-app-long-term-context.md docs/context/
 ```
 
 持续运行：
@@ -114,6 +122,24 @@ runs/my-app/state/current_doc
 ```
 
 `current_doc` 中的相对路径会基于 `docs/iterations/` 解析。
+
+## 长期常驻上下文
+
+`docs/iterations/` 里的文档代表“当前这一轮或下一轮要执行的任务”。如果某些信息应该长期存在，例如产品方向、不可破坏的规则、测试素材路径、视觉标准、用户偏好、项目约束，就放在：
+
+```text
+docs/context/
+```
+
+runner 每轮都会把 `docs/context/*.md` 和 `docs/context/*.txt` 注入 Codex 提示词。这些文件不会被消费或移动，适合多轮持续可见。
+
+也可以用环境变量指定额外文件，多个路径用冒号分隔：
+
+```bash
+export CODEX_CONTEXT_FILES=/srv/shared/product-principles.md:/srv/shared/test-fixtures.md
+```
+
+默认情况下，`docs/context/` 中除 `.gitkeep` 外的文件不会进入框架仓库。这样可以把项目专属长期要求保留在服务器上，同时保持框架仓库干净可迁移。
 
 ## 目标项目内的 Git 行为
 
@@ -198,6 +224,8 @@ cp urgent-followup.md runs/my-app/requests/
 
 下一轮开始前，runner 会把 `next-requirements.md` 以及所有顶层的 `runs/my-app/requests/*.md` 或 `*.txt` 文件注入 Codex 提示词。这些追加需求的优先级高于上一轮生成的后续方向。默认情况下，一轮成功结束后，这些已注入的需求文件会被移动到 `runs/my-app/requests/processed/`。
 
+如果某个需求不是一次性的，而是希望后续每一轮都持续可见，不要放到 `requests/`，应该放到 `docs/context/`。
+
 ## 重要环境变量
 
 | 变量 | 含义 |
@@ -207,6 +235,8 @@ cp urgent-followup.md runs/my-app/requests/
 | `CODEX_PROFILE` | 可选，通过 `-p` 传给 Codex 的配置 profile。 |
 | `CODEX_PROJECTS_DIR` | 项目根目录，默认 `projects/`。 |
 | `CODEX_DOCS_DIR` | 迭代文档目录，默认 `docs/iterations/`。 |
+| `CODEX_CONTEXT_DOCS_DIR` | 长期常驻上下文目录，默认 `docs/context/`。 |
+| `CODEX_CONTEXT_FILES` | 额外长期上下文文件，多个路径用冒号分隔。 |
 | `CODEX_RUNS_DIR` | 运行状态目录，默认 `runs/`。 |
 | `CODEX_RUN_NAME` | 覆盖本次运行目录名。 |
 | `CODEX_MAX_ROUNDS` | 最大轮数，`0` 表示一直运行。 |
@@ -240,12 +270,13 @@ CODEX_RESET_LOOP=1 ./bin/codex-continuous-runner.sh my-app my-app-seed.md
 - `bin/`
 - `config/*.example`
 - `docs/templates/`
-- `docs/iterations/`、`projects/` 和 `runs/` 的空目录占位文件
+- `docs/context/`、`docs/iterations/`、`projects/` 和 `runs/` 的空目录占位文件
 
 下面这些内容会被故意忽略：
 
 - `projects/` 下被拉取或被持续开发的项目
 - `docs/iterations/` 下生成的迭代文档
+- `docs/context/` 下的项目长期上下文文档
 - `runs/` 下的提示词、日志、状态、脚本、监控文件、工具链和缓存
 - 本地操作配置，例如 `config/runner.env`
 
