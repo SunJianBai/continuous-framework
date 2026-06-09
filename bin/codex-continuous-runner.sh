@@ -32,6 +32,8 @@ usage() {
   CODEX_MAX_ROUNDS                  0 表示一直运行，默认：0
   CODEX_SLEEP_SECONDS               每轮之间的暂停秒数，默认：10
   CODEX_MAX_CONSECUTIVE_FAILURES    连续失败达到该次数后停止，默认：3
+  CODEX_RECOVERABLE_EXIT_CODES      可恢复退出码列表，默认：143
+  CODEX_MAX_RECOVERABLE_INTERRUPTS  可恢复中断最大次数，0 表示不限制，默认：0
   CODEX_STRATEGY_MODE               迭代策略：expansive | conservative，默认：expansive
   CODEX_BASELINE_VERIFY             设为 1 时要求主动做全面基线验证，默认：1
   CODEX_FEATURE_DISCOVERY           设为 1 时要求主动发现并规划新功能，默认：1
@@ -60,6 +62,8 @@ SEED_DOC="$2"
 MAX_ROUNDS="${CODEX_MAX_ROUNDS:-0}"
 SLEEP_SECONDS="${CODEX_SLEEP_SECONDS:-10}"
 MAX_CONSECUTIVE_FAILURES="${CODEX_MAX_CONSECUTIVE_FAILURES:-3}"
+RECOVERABLE_EXIT_CODES="${CODEX_RECOVERABLE_EXIT_CODES:-143}"
+MAX_RECOVERABLE_INTERRUPTS="${CODEX_MAX_RECOVERABLE_INTERRUPTS:-0}"
 STRATEGY_MODE="${CODEX_STRATEGY_MODE:-expansive}"
 BASELINE_VERIFY="${CODEX_BASELINE_VERIFY:-1}"
 FEATURE_DISCOVERY="${CODEX_FEATURE_DISCOVERY:-1}"
@@ -136,6 +140,8 @@ STATE_CURRENT_DOC="$STATE_DIR/current_doc"
 STATE_SESSION_STARTED="$STATE_DIR/session_started"
 STATE_SESSION_ID="$STATE_DIR/session_id"
 STATE_ROUND="$STATE_DIR/round"
+STATE_LAST_INTERRUPTION="$STATE_DIR/last_interruption"
+STATE_RECOVERABLE_INTERRUPTS="$STATE_DIR/recoverable_interrupts"
 STOP_AFTER_CURRENT_ROUND_FILE="${CODEX_STOP_AFTER_CURRENT_ROUND_FILE:-$CONTROL_DIR/stop-after-current-round}"
 NEXT_REQUIREMENTS_FILE="${CODEX_NEXT_REQUIREMENTS_FILE:-$CONTROL_DIR/next-requirements.md}"
 CONSUME_REQUIREMENTS="${CODEX_CONSUME_REQUIREMENTS:-1}"
@@ -162,6 +168,11 @@ else
   round=1
 fi
 consecutive_failures=0
+if [[ -s "$STATE_RECOVERABLE_INTERRUPTS" ]] && [[ "$(head -n 1 "$STATE_RECOVERABLE_INTERRUPTS")" =~ ^[0-9]+$ ]]; then
+  recoverable_interrupts="$(head -n 1 "$STATE_RECOVERABLE_INTERRUPTS")"
+else
+  recoverable_interrupts=0
+fi
 additional_requirement_sources=()
 persistent_context_sources=()
 
@@ -259,6 +270,17 @@ extract_session_id_from_log() {
   printf '%s\n' "$thread_line" | sed -nE 's/.*"thread_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
 }
 
+is_recoverable_exit_code() {
+  local status="$1"
+  local code
+  for code in $RECOVERABLE_EXIT_CODES; do
+    if [[ "$status" == "$code" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 while true; do
   if [[ -f "$STOP_AFTER_CURRENT_ROUND_FILE" ]]; then
     echo "检测到停止标记，未启动 round=$round：$STOP_AFTER_CURRENT_ROUND_FILE"
@@ -296,8 +318,10 @@ while true; do
   strategy_file="$PROMPT_DIR/round-${round}-${stamp}.strategy.md"
   requirements_file="$PROMPT_DIR/round-${round}-${stamp}.additional-requirements.md"
   context_file="$PROMPT_DIR/round-${round}-${stamp}.persistent-context.md"
+  interruption_file="$PROMPT_DIR/round-${round}-${stamp}.last-interruption.md"
   additional_requirements_block=""
   persistent_context_block=""
+  last_interruption_block=""
 
   if [[ "$UNRESTRICTED" == "1" ]]; then
     cat > "$permission_file" <<PERMISSIONS
@@ -430,6 +454,19 @@ STRATEGY
     rm -f "$context_file"
   fi
 
+  if [[ -s "$STATE_LAST_INTERRUPTION" ]]; then
+    {
+      echo "上一轮可恢复中断："
+      echo
+      echo "上一轮 Codex CLI 子进程以可恢复状态退出，通常表示长编译、长测试或外部执行器超时导致单轮进程被 SIGTERM。不要把它当成任务失败；先检查后台命令是否仍在运行、工作树是否可控、最近日志是否已有结果，然后从最近状态继续。"
+      echo
+      cat "$STATE_LAST_INTERRUPTION"
+    } > "$interruption_file"
+    last_interruption_block="$(cat "$interruption_file")"
+  else
+    rm -f "$interruption_file"
+  fi
+
   cat > "$prompt_file" <<PROMPT
 你是一个无人值守的 Codex 开发循环执行器。当前项目目录：
 
@@ -474,6 +511,8 @@ $(cat "$permission_file")
 $(cat "$strategy_file")
 
 $persistent_context_block
+
+$last_interruption_block
 
 $additional_requirements_block
 
@@ -563,15 +602,45 @@ PROMPT
   fi
 
   if [[ "$status" -ne 0 ]]; then
-    consecutive_failures=$((consecutive_failures + 1))
-    echo "Codex CLI 失败，status=$status；consecutive_failures=$consecutive_failures"
-    tail -n 80 "$log_file" || true
-    if [[ "$consecutive_failures" -ge "$MAX_CONSECUTIVE_FAILURES" ]]; then
-      echo "连续失败 $consecutive_failures 次，停止运行。"
-      exit "$status"
+    extracted_session_id="$(extract_session_id_from_log "$log_file" || true)"
+    if [[ -n "$extracted_session_id" ]]; then
+      printf '%s\n' "$extracted_session_id" > "$STATE_SESSION_ID"
+      printf '%s\n' "$stamp" > "$STATE_SESSION_STARTED"
+    fi
+
+    if is_recoverable_exit_code "$status"; then
+      consecutive_failures=0
+      recoverable_interrupts=$((recoverable_interrupts + 1))
+      printf '%s\n' "$recoverable_interrupts" > "$STATE_RECOVERABLE_INTERRUPTS"
+      printf '%s\n' "$round" > "$STATE_ROUND"
+      {
+        echo "stamp=$stamp"
+        echo "round=$round"
+        echo "status=$status"
+        echo "log=$log_file"
+        echo "session_id=$(head -n 1 "$STATE_SESSION_ID" 2>/dev/null || true)"
+      } > "$STATE_LAST_INTERRUPTION"
+
+      echo "Codex CLI 可恢复中断，status=$status；recoverable_interrupts=$recoverable_interrupts。runner 将继续 resume。"
+      tail -n 80 "$log_file" || true
+      if [[ "$MAX_RECOVERABLE_INTERRUPTS" != "0" && "$recoverable_interrupts" -ge "$MAX_RECOVERABLE_INTERRUPTS" ]]; then
+        echo "可恢复中断达到 CODEX_MAX_RECOVERABLE_INTERRUPTS=$MAX_RECOVERABLE_INTERRUPTS，停止运行。"
+        exit "$status"
+      fi
+    else
+      consecutive_failures=$((consecutive_failures + 1))
+      echo "Codex CLI 失败，status=$status；consecutive_failures=$consecutive_failures"
+      tail -n 80 "$log_file" || true
+      if [[ "$consecutive_failures" -ge "$MAX_CONSECUTIVE_FAILURES" ]]; then
+        echo "连续失败 $consecutive_failures 次，停止运行。"
+        exit "$status"
+      fi
     fi
   else
     consecutive_failures=0
+    recoverable_interrupts=0
+    printf '%s\n' "$recoverable_interrupts" > "$STATE_RECOVERABLE_INTERRUPTS"
+    rm -f "$STATE_LAST_INTERRUPTION"
     extracted_session_id="$(extract_session_id_from_log "$log_file" || true)"
     if [[ -n "$extracted_session_id" ]]; then
       printf '%s\n' "$extracted_session_id" > "$STATE_SESSION_ID"

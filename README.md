@@ -111,6 +111,8 @@ runs/my-app/
     processed/
   state/
     current_doc
+    last_interruption
+    recoverable_interrupts
     round
     session_id
     session_started
@@ -149,6 +151,28 @@ CODEX_RESET_SESSION=1 ./bin/codex-continuous-runner.sh my-app my-app-seed.md
 ```
 
 注意：同一个会话不等于无限上下文。长时间运行后，Codex 仍可能进行上下文压缩或摘要。因此关键长期规则、素材路径和产品方向仍应写入 `docs/context/`，让 runner 每轮固定注入。
+
+## 可恢复中断
+
+长时间编译、测试或运行服务时，`codex exec` 子进程可能被外部执行器终止，Shell 常见返回码是 `143`。这通常表示子进程收到了 `SIGTERM`，不等于目标项目测试失败。
+
+runner 默认把 `143` 视为可恢复中断：
+
+```bash
+export CODEX_RECOVERABLE_EXIT_CODES=143
+export CODEX_MAX_RECOVERABLE_INTERRUPTS=0
+```
+
+遇到可恢复中断时，runner 会：
+
+- 保存当前 session id。
+- 把中断信息写入 `runs/<project>/state/last_interruption`。
+- 把中断次数写入 `runs/<project>/state/recoverable_interrupts`。
+- 清零普通连续失败计数。
+- 下一轮继续 `resume <session_id>`。
+- 在下一轮提示词中说明上一轮是可恢复中断，要求 Codex 先检查后台命令、工作树和最近日志，然后继续。
+
+`CODEX_MAX_RECOVERABLE_INTERRUPTS=0` 表示不限制可恢复中断次数。普通非可恢复失败仍然受 `CODEX_MAX_CONSECUTIVE_FAILURES` 限制。
 
 ## 长期常驻上下文
 
@@ -270,6 +294,8 @@ cp urgent-followup.md runs/my-app/requests/
 | `CODEX_SLEEP_SECONDS` | 每轮之间的等待秒数。 |
 | `CODEX_RESET_LOOP` | 设为 `1` 时忽略已保存状态，从 seed 文档重新开始。 |
 | `CODEX_RESET_SESSION` | 设为 `1` 时丢弃保存的 Codex 会话 id，重新开始会话。 |
+| `CODEX_RECOVERABLE_EXIT_CODES` | 可恢复退出码列表，默认 `143`。 |
+| `CODEX_MAX_RECOVERABLE_INTERRUPTS` | 可恢复中断最大次数，`0` 表示不限制。 |
 | `CODEX_STRATEGY_MODE` | 迭代策略，默认 `expansive`。可设为 `conservative`。 |
 | `CODEX_BASELINE_VERIFY` | 是否要求 Codex 主动做全面基线验证，默认 `1`。 |
 | `CODEX_FEATURE_DISCOVERY` | 是否要求 Codex 主动发现并规划新功能，默认 `1`。 |
