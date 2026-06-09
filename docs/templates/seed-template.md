@@ -1,35 +1,52 @@
-# Iteration Seed Template
+# 初始迭代文档模板
 
-## Goal
+## 目标
 
-Describe the first concrete outcome Codex should deliver for this project.
+描述 Codex 应该为这个项目交付的第一个具体成果。
 
-## Context
+第一版目标完成后，Codex 应继续自主迭代：先做全面基线验证，再主动寻找值得新增的功能，创建新的功能迭代文档，并继续开发。
 
-- Project directory: `projects/<project-name>`
-- Runtime directory: `runs/<project-name>`
-- Generated iteration docs directory: `docs/iterations`
+## 背景
 
-## Tasks
+- 项目目录：`projects/<project-name>`
+- 运行目录：`runs/<project-name>`
+- 生成的迭代文档目录：`docs/iterations`
 
-- [ ] Inspect the project README, build files, test configuration, and git status.
-- [ ] Identify the smallest useful implementation or verification slice.
-- [ ] Make the change or run the setup needed for that slice.
-- [ ] Run the most relevant verification command.
-- [ ] Update this document with completed work, verification results, blockers, and the next iteration direction.
-- [ ] Create the next iteration document under `docs/iterations/`.
-- [ ] Write the next document path to `runs/<project-name>/state/current_doc`.
+## 任务
 
-## Verification
+- [ ] 阅读项目 README、构建文件、测试配置和 git 状态。
+- [ ] 修改项目代码前，创建本轮专用开发分支。
+- [ ] 找出最小但有价值的实现或验证切片。
+- [ ] 完成这个切片所需的改动或环境配置。
+- [ ] 运行最相关的验证命令。
+- [ ] 阶段性版本验证通过后，尝试做一次聚焦的 git 提交。
+- [ ] 更新本文档，记录已完成工作、验证结果、阻塞和下一轮方向。
+- [ ] 如果初始目标已经完成，运行尽量全面的基线验证。
+- [ ] 主动提出 2 到 4 个新功能候选，并选择一个最值得继续开发的方向。
+- [ ] 在 `docs/iterations/` 下创建下一轮功能迭代文档，优先命名为 `feature-<round>-<slug>.md`。
+- [ ] 把下一轮文档路径写入 `runs/<project-name>/state/current_doc`。
 
-List the command(s) that prove this iteration worked.
+## 验证方式
 
-## Stop Conditions
+列出能证明本轮迭代有效的命令。第一版目标完成后，Codex 应尽量识别并运行更全面的验证组合，例如测试、构建、lint、类型检查、CLI smoke test、服务健康检查或端到端检查。
 
-- Stop only if the task is complete, the requested proof has passed, or a blocker is documented with a smaller next-step document.
-- Do not wait for human approval unless the environment prevents meaningful progress.
+## 后续功能发现
 
-## Risks
+初始需求完成后，Codex 不应只做字段命名、格式化、注释或零散小重构。它应该从下面方向中主动寻找下一个完整功能：
 
-- Note any commands that may be long running.
-- Note any services, ports, credentials, or external dependencies involved.
+- 用户工作流中缺失的命令、页面、配置或自动化能力
+- 能明显提高运行可靠性的监控、日志、健康检查或错误恢复能力
+- 能提高开发效率的测试工具、脚手架、报告、fixture 或调试命令
+- 能改善部署和运维体验的启动脚本、环境检查、状态报告或文档生成能力
+- 能让项目更接近真实可用产品的导入导出、权限、数据校验、搜索、批处理或集成功能
+
+## 停止条件
+
+- 只有在任务完成、要求的验证通过，并且已经生成下一轮文档时才停止当前轮。
+- 如果遇到阻塞，要记录阻塞，并拆成更小的下一步文档继续推进。
+- 除非环境已经无法继续推进，否则不要等待人工批准。
+
+## 风险
+
+- 记录可能长时间运行的命令。
+- 记录涉及的服务、端口、凭据或外部依赖。
