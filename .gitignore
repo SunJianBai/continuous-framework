@@ -1,0 +1,29 @@
+# Local operator config.
+/config/runner.env
+*.local
+
+# Projects under active autonomous development. Keep only the directory marker.
+/projects/*
+!/projects/.gitkeep
+
+# Runtime state, prompts, logs, helper scripts, monitors, toolchains, and caches.
+/runs/*
+!/runs/.gitkeep
+
+# Generated iteration documents. Keep only the directory marker.
+/docs/iterations/*
+!/docs/iterations/.gitkeep
+
+# OS/editor noise.
+.DS_Store
+._*
+*.swp
+*.swo
+
+# Temporary archives and logs.
+*.log
+*.tmp
+*.tar
+*.tar.gz
+*.tgz
+*.zip
